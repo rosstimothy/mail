@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -76,14 +77,17 @@ func NewPlainDialer(host string, port int, username, password string) *Dialer {
 // proxy or other special behavior is needed.
 var NetDialTimeout = net.DialTimeout
 
-// Dial dials and authenticates to an SMTP server. The returned SendCloser
-// should be closed when done using it.
-func (d *Dialer) Dial() (SendCloser, error) {
-	conn, err := NetDialTimeout("tcp", addr(d.Host, d.Port), d.Timeout)
+func (d *Dialer) DialWithContext(ctx context.Context) (SendCloser, error) {
+	var dial net.Dialer
+	conn, err := dial.DialContext(ctx, "tcp", addr(d.Host, d.Port))
 	if err != nil {
 		return nil, err
 	}
 
+	return d.dial(conn)
+}
+
+func (d *Dialer) dial(conn net.Conn) (SendCloser, error) {
 	if d.SSL {
 		conn = tlsClient(conn, d.tlsConfig())
 	}
@@ -146,6 +150,17 @@ func (d *Dialer) Dial() (SendCloser, error) {
 	return &smtpSender{c, conn, d}, nil
 }
 
+// Dial dials and authenticates to an SMTP server. The returned SendCloser
+// should be closed when done using it.
+func (d *Dialer) Dial() (SendCloser, error) {
+	conn, err := NetDialTimeout("tcp", addr(d.Host, d.Port), d.Timeout)
+	if err != nil {
+		return nil, err
+	}
+
+	return d.dial(conn)
+}
+
 func (d *Dialer) tlsConfig() *tls.Config {
 	if d.TLSConfig == nil {
 		return &tls.Config{ServerName: d.Host}
@@ -196,6 +211,16 @@ func (e StartTLSUnsupportedError) Error() string {
 
 func addr(host string, port int) string {
 	return fmt.Sprintf("%s:%d", host, port)
+}
+
+func (d *Dialer) DialAndSendContext(ctx context.Context, m ...*Message) error {
+	s, err := d.DialWithContext(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	return Send(s, m...)
 }
 
 // DialAndSend opens a connection to the SMTP server, sends the given emails and
